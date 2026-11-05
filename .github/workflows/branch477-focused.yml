@@ -1,0 +1,83 @@
+name: Verify unchanged complete gates and response-branching integration
+on:
+  push:
+    branches: [validation-response-branching-477-i6]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify previous complete gates and seal the test-only delta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v gh
+          test "$(uname -s)" = Linux
+          test "$(df --output=avail -B1 "$RUNNER_TEMP" | tail -1)" -ge 12884901888
+          inputs="$RUNNER_TEMP/branch477-inputs"
+          out="$RUNNER_TEMP/branch477-evidence"
+          mkdir -p "$inputs" "$out" "$RUNNER_TEMP/branch477-pip-cache"
+          feature=$(git rev-parse HEAD^)
+          test "$feature" = f8edb7df63eee7f42378cba625c6c006957c5df7
+          test "$(git rev-parse "$feature^")" = 94a1dc14fa7fd3c7631ba446753123fa797753a8
+          git diff --name-only "$feature" HEAD | sort > "$out/fork-only-files.txt"
+          printf '%s\n' .github/branch477-focused-run.sh .github/branch477-focused-source.sha256 .github/branch477-prior-source.sha256 .github/branch477-verify-prior.py .github/workflows/branch477-focused.yml | sort > "$out/expected-fork-only-files.txt"
+          diff -u "$out/expected-fork-only-files.txt" "$out/fork-only-files.txt"
+          echo '71ccba34bcba9a73b9ec0e3b7f43a88c73502a3cf3dc500c515e90818731fb17  .github/branch477-verify-prior.py' | sha256sum -c -
+          gh api repos/leninworld/harnessrouter/actions/runs/41954591245 > "$out/prior-run-metadata.json"
+          python .github/branch477-verify-prior.py --metadata-only "$out/prior-run-metadata.json"
+          timeout --signal=TERM --kill-after=5s 60 gh run download 41954591245 --repo leninworld/harnessrouter --name branch477-hosted-docker-evidence --dir "$RUNNER_TEMP/branch477-prior"
+          python .github/branch477-verify-prior.py "$RUNNER_TEMP/branch477-prior" "$out/reused-complete-gates.json" "$feature" "$out/prior-run-metadata.json"
+          mkdir -p .git/info
+          printf '* -export-ignore -export-subst\n' > .git/info/attributes
+          git archive 8e1cf1b598a7ea864fda3a5de064b11289b6ac84 > "$inputs/base.tar"
+          git archive "$feature" > "$inputs/feature.tar"
+          cp .github/branch477-focused-run.sh "$inputs/run.sh"
+          cp .github/branch477-focused-source.sha256 "$inputs/source.sha256"
+          cp .github/branch477-prior-source.sha256 "$inputs/prior-source.sha256"
+          cp "$RUNNER_TEMP/branch477-prior/joint-freeze.txt" "$inputs/joint-freeze.txt"
+          echo 'dbefed9520ad568b09dde8ba2c3c37e4d2ee6ea372671d536311a8715a476930  '"$inputs/run.sh" | sha256sum -c -
+          echo '3127bfe56c7e947f89cc9f9e0333af8460b6c2c19f23217efec34b952fdb701c  '"$inputs/source.sha256" | sha256sum -c -
+          echo 'ce237a894342ce2c9a828462e421772f70145de0d6cc214288be62ab2f5b0786  '"$inputs/prior-source.sha256" | sha256sum -c -
+          echo '5cd8ea2f322f86d8fab120f269403fff532c09ea68362969a23094bffd2ab47a  '"$inputs/joint-freeze.txt" | sha256sum -c -
+          git diff --binary 8e1cf1b598a7ea864fda3a5de064b11289b6ac84 "$feature" > "$out/tested.patch"
+          printf '%s\n' "$feature" > "$out/tested-head.txt"
+          sha256sum "$inputs/"* > "$out/input-sha256.txt"
+          docker info --format '{{.OperatingSystem}} {{.Architecture}} {{.MemTotal}} {{.DockerRootDir}}' > "$out/docker-host.txt"
+          test "$(docker info --format '{{.MemTotal}}')" -ge 7516192768
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/branch477-pip-cache
+          key: branch477-py312-5cd8ea2f322f86d8fab120f269403fff532c09ea68362969a23094bffd2ab47a
+      - name: Fresh faithful integration and exact base negative control in Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/branch477-evidence"
+          name="branch477-focused-${GITHUB_RUN_ID}"
+          trap 'docker stop --time 10 "$name" > "$out/stop.log" 2>&1 || true; docker inspect "$name" --format "{{json .State}}" > "$out/container-state.json" 2>/dev/null || true' EXIT
+          image=python@sha256:b18b261e1b4974b4f321451ad5251ded85abb22c2b8b262da527dda1d031ab30
+          docker pull "$image" > "$out/image-pull.log" 2>&1
+          printf '%s\n' "$image" > "$out/image-digest.txt"
+          docker create --init --name "$name" --cpus 2 --memory 6g --memory-swap 6g --pids-limit 512 --log-driver none \
+            --mount "type=bind,src=$RUNNER_TEMP/branch477-inputs,dst=/inputs,readonly" \
+            --mount "type=bind,src=$out,dst=/out" \
+            --mount "type=bind,src=$RUNNER_TEMP/branch477-pip-cache,dst=/root/.cache/pip" "$image" \
+            python -c 'import signal,sys,time; signal.signal(signal.SIGTERM,lambda *_:sys.exit(0)); time.sleep(900)'
+          docker start "$name"
+          timeout --signal=TERM --kill-after=10s 840 docker exec "$name" bash /inputs/run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: branch477-focused-docker-evidence
+          path: ${{ runner.temp }}/branch477-evidence
+          retention-days: 14
