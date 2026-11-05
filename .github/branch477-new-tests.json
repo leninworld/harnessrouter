@@ -1,0 +1,56 @@
+{
+  "gateway": [
+    "test_new_session_has_only_history_to_selected_response_and_preserves_original",
+    "test_unavailable_checkpoint_is_http409_before_any_target_work",
+    "test_harness_scope_is_checked_before_checkpoint_availability",
+    "test_branch_does_not_claim_an_answer_to_original_question",
+    "test_nonboolean_branch_is_ignored_not_coerced_or_rejected",
+    "test_false_and_absent_branch_preserve_existing_idempotency_hash",
+    "test_missing_full_commit_from_old_runner_writes_no_checkpoint_mapping",
+    "test_app_checkpoint_rewrite_does_not_hide_a_valid_git_point",
+    "test_mapping_failure_does_not_poison_an_acknowledged_checkpoint",
+    "test_deleted_source_is_404_and_private_mapping_is_removed",
+    "test_other_org_cannot_probe_checkpoint_availability",
+    "test_runner_refusal_is_retryable_503_not_branch_unavailable",
+    "test_real_idempotency_replay_creates_one_target",
+    "test_true_without_point_is_ignored_over_http",
+    "test_each_mode_has_its_index_before_the_terminal_checkpoint",
+    "test_stream_start_and_background_ack_identify_the_branch",
+    "test_partial_import_failure_removes_target_records_and_releases_idempotency",
+    "test_imported_tools_redacted_input_and_artifacts_are_owned_by_target",
+    "test_orphan_adoption_maps_its_checkpoint_and_keeps_input_chain_and_origin",
+    "test_calibration_refusal_precedes_checkpoint_lookup",
+    "test_source_read_outage_is_retryable_not_a_500",
+    "test_malformed_private_turn_index_is_unavailable_not_a_500",
+    "test_deleted_earlier_response_is_not_reintroduced_by_branch",
+    "test_malformed_provenance_does_not_break_detail_or_continuation"
+  ],
+  "runner": [
+    "test_branch_from_one_after_three_restores_user_files_and_leaves_original",
+    "test_source_git_config_and_hooks_are_never_executed",
+    "test_missing_nonfull_or_divergent_commits_fail_before_export",
+    "test_a_gitlink_is_not_silently_dropped",
+    "test_escaping_committed_symlink_fails_without_writing_outside",
+    "test_real_runner_branch_is_idempotent_and_its_checkpoint_has_full_commit",
+    "test_empty_branch_never_becomes_a_fresh_workspace",
+    "test_incomplete_branch_body_preserves_original",
+    "test_export_attributes_cannot_drop_or_substitute_committed_bytes",
+    "test_a_present_but_divergent_commit_is_not_a_branch_point",
+    "test_actual_cli_home_history_shed_makes_old_point_unavailable",
+    "test_every_checkpoint_exclusion_hides_old_tracked_root_and_nested_files",
+    "test_crafted_checkpoint_is_refused_before_target_export",
+    "test_derived_graph_metadata_is_not_imported_or_consulted",
+    "test_checkpoint_git_metadata_failure_keeps_user_files",
+    "test_transient_restore_error_is_retryable_and_leaves_no_partial_target",
+    "test_disconnected_upload_does_not_create_target",
+    "test_subdirectory_base_file_root_is_regenerated_without_cli_state"
+  ],
+  "integration": [
+    "test_three_real_turns_branch_from_one_and_continue_after_gateway_memory_reset"
+  ],
+  "conformance": [
+    "test_correct_branch_server_passes",
+    "test_specific_defects_fail",
+    "test_fresh_fixture_unavailable_checkpoint_fails_full_conformance"
+  ]
+}
