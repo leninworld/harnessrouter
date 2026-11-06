@@ -1,0 +1,78 @@
+name: Validate PR639 contributor review fixes in Docker
+on:
+  push:
+    branches: [validation-pr639-review-4824d84]
+permissions:
+  contents: read
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/branch477-pip-cache
+          key: branch477-py312-${{ hashFiles('gateway/requirements.txt', 'runner/requirements.txt', 'protocol/conformance/pyproject.toml') }}
+      - name: Seal exact feature and baseline source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test -n "$RUNNER_TEMP"
+          test "$(df --output=avail -B1 "$RUNNER_TEMP" | tail -1)" -ge 12884901888
+          mkdir -p "$RUNNER_TEMP/branch477-inputs" "$RUNNER_TEMP/branch477-evidence" "$RUNNER_TEMP/branch477-pip-cache"
+          feature=$(git rev-parse HEAD^)
+          base=f8edb7df63eee7f42378cba625c6c006957c5df7
+          # Filled once with the reviewed feature commit before this fork-only commit is pushed.
+          test "$feature" = 85fe9bb3b39f470091d73ca02a92a1bc5523ab70
+          test "$(git rev-parse "$feature^")" = 4824d8475d5fb89864b646dd8eea2278ffb07dff
+          test "$(git rev-parse "$feature^^")" = "$base"
+          git diff --name-only "$feature" HEAD | sort > "$RUNNER_TEMP/fork-only-files"
+          printf '%s\n' .github/branch477-hosted-run.sh .github/branch477-compare.py .github/branch477-source.sha256 .github/workflows/branch477-validation.yml | sort > "$RUNNER_TEMP/expected-files"
+          diff -u "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/fork-only-files"
+          git diff --name-only "$base" "$feature" | sort > "$RUNNER_TEMP/actual-source-paths"
+          sed 's/^[0-9a-f]*  //' .github/branch477-source.sha256 | sort > "$RUNNER_TEMP/expected-source-paths"
+          diff -u "$RUNNER_TEMP/expected-source-paths" "$RUNNER_TEMP/actual-source-paths"
+          # Archive attributes are not allowed to drop/substitute source bytes.
+          mkdir -p .git/info
+          printf '* -export-ignore -export-subst\n' > .git/info/attributes
+          git archive "$base" > "$RUNNER_TEMP/branch477-inputs/base.tar"
+          git archive "$feature" > "$RUNNER_TEMP/branch477-inputs/feature.tar"
+          cp .github/branch477-hosted-run.sh "$RUNNER_TEMP/branch477-inputs/run.sh"
+          cp .github/branch477-compare.py "$RUNNER_TEMP/branch477-inputs/compare.py"
+          cp .github/branch477-source.sha256 "$RUNNER_TEMP/branch477-inputs/source.sha256"
+          echo 'df52aa089d08875d7cfccf4631935d875acbb8a86fdd4a775aefafc7e6f302c3  '"$RUNNER_TEMP/branch477-inputs/run.sh" | sha256sum -c -
+          echo '7dedff7834a2b650c2f81c12caf8f5ff3c0b65a56a321ffe11ce2cccfc1157b8  '"$RUNNER_TEMP/branch477-inputs/compare.py" | sha256sum -c -
+          echo 'd1c8f919fa77a736a5107e43e56739e966484f8744fcd52da53756f6617ce40d  '"$RUNNER_TEMP/branch477-inputs/source.sha256" | sha256sum -c -
+          git diff --binary "$base" "$feature" > "$RUNNER_TEMP/branch477-evidence/tested.patch"
+          printf '%s\n' "$feature" > "$RUNNER_TEMP/branch477-evidence/tested-head.txt"
+          sha256sum "$RUNNER_TEMP/branch477-inputs/"* > "$RUNNER_TEMP/branch477-evidence/input-sha256.txt"
+          docker info --format '{{.OperatingSystem}} {{.Architecture}} {{.MemTotal}} {{.DockerRootDir}}' > "$RUNNER_TEMP/branch477-evidence/docker-host.txt"
+          test "$(docker info --format '{{.MemTotal}}')" -ge 7516192768
+      - name: Fresh complete validation in Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/branch477-evidence"
+          name="branch477-${GITHUB_RUN_ID}"
+          trap 'docker stop --time 10 "$name" > "$out/stop.log" 2>&1 || true; docker inspect "$name" --format "{{json .State}}" > "$out/container-state.json" 2>/dev/null || true' EXIT
+          image=python@sha256:b18b261e1b4974b4f321451ad5251ded85abb22c2b8b262da527dda1d031ab30
+          docker pull "$image" > "$out/image-pull.log" 2>&1
+          printf '%s\n' "$image" > "$out/image-digest.txt"
+          docker create --init --name "$name" --cpus 2 --memory 6g --memory-swap 6g --pids-limit 512 \
+            --log-driver none --mount "type=bind,src=$RUNNER_TEMP/branch477-inputs,dst=/inputs,readonly" \
+            --mount "type=bind,src=$out,dst=/out" \
+            --mount "type=bind,src=$RUNNER_TEMP/branch477-pip-cache,dst=/root/.cache/pip" "$image" \
+            python -c 'import signal,sys,time; signal.signal(signal.SIGTERM,lambda *_:sys.exit(0)); time.sleep(3300)'
+          docker start "$name"
+          timeout --signal=TERM --kill-after=10s 3000 docker exec "$name" bash /inputs/run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr639-review-docker-evidence
+          path: ${{ runner.temp }}/branch477-evidence
+          retention-days: 14
