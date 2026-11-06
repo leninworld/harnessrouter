@@ -1,0 +1,82 @@
+name: Validate branching after upstream session isolation merge
+on:
+  push:
+    branches: [validation-pr639-upstream-89aed57]
+permissions:
+  contents: read
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/branch477-pip-cache
+          key: branch477-py312-${{ hashFiles('gateway/requirements.txt', 'runner/requirements.txt', 'protocol/conformance/pyproject.toml') }}
+      - name: Seal exact feature and baseline source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test -n "$RUNNER_TEMP"
+          test "$(df --output=avail -B1 "$RUNNER_TEMP" | tail -1)" -ge 12884901888
+          mkdir -p "$RUNNER_TEMP/branch477-inputs" "$RUNNER_TEMP/branch477-evidence" "$RUNNER_TEMP/branch477-pip-cache"
+          feature=$(git rev-parse HEAD^)
+          test "$feature" = 51e4c1b444e05376169055663d3cc0872935ab38
+          test "$(git rev-parse "$feature^1")" = 89aed57f7489d17ee3492a4353bf07a40b49b505
+          test "$(git rev-parse "$feature^2")" = 85fe9bb3b39f470091d73ca02a92a1bc5523ab70
+          git diff --name-only "$feature" HEAD | sort > "$RUNNER_TEMP/fork-only-files"
+          printf '%s\n' .github/branch477-hosted-run.sh .github/branch477-compare.py .github/branch477-source.sha256 .github/branch477-runner-freeze.txt .github/branch477-joint-freeze.txt .github/branch477-previous-runner.xml .github/branch477-gw-freeze.txt .github/branch477-previous-gateway.xml .github/workflows/branch477-validation.yml | sort > "$RUNNER_TEMP/expected-files"
+          diff -u "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/fork-only-files"
+          # Archive attributes are not allowed to drop/substitute source bytes.
+          mkdir -p .git/info
+          printf '* -export-ignore -export-subst\n' > .git/info/attributes
+          git archive "$feature" > "$RUNNER_TEMP/branch477-inputs/feature.tar"
+          cp .github/branch477-hosted-run.sh "$RUNNER_TEMP/branch477-inputs/run.sh"
+          cp .github/branch477-compare.py "$RUNNER_TEMP/branch477-inputs/compare.py"
+          cp .github/branch477-source.sha256 "$RUNNER_TEMP/branch477-inputs/source.sha256"
+          cp .github/branch477-runner-freeze.txt "$RUNNER_TEMP/branch477-inputs/runner-freeze.txt"
+          cp .github/branch477-joint-freeze.txt "$RUNNER_TEMP/branch477-inputs/joint-freeze.txt"
+          cp .github/branch477-previous-runner.xml "$RUNNER_TEMP/branch477-inputs/previous-runner.xml"
+          echo '2ada74b516e3fe0c15d9db0fd23b820c202ca2cc47f66a16c19406dc803ea343  '"$RUNNER_TEMP/branch477-inputs/run.sh" | sha256sum -c -
+          echo 'b24b7bd0f681aa86b7c1f6d6b816bdb4ecaa72e71b42c8e1f40e35aeff541af4  '"$RUNNER_TEMP/branch477-inputs/compare.py" | sha256sum -c -
+          echo '51287f99fe886c9c28516b8a307143ee96b08430e0804ec175b7716c0d758071  '"$RUNNER_TEMP/branch477-inputs/source.sha256" | sha256sum -c -
+          echo '276fad0da4edf87fc39063208d50815581fcf554fb8cfb931bed5f84fb334eb8  '"$RUNNER_TEMP/branch477-inputs/runner-freeze.txt" | sha256sum -c -
+          echo '5cd8ea2f322f86d8fab120f269403fff532c09ea68362969a23094bffd2ab47a  '"$RUNNER_TEMP/branch477-inputs/joint-freeze.txt" | sha256sum -c -
+          echo '24dd5cf1cd4d1da1d1ee2c24b9b07197e107006b8503045c13051171ab9f060c  '"$RUNNER_TEMP/branch477-inputs/previous-runner.xml" | sha256sum -c -
+          cp .github/branch477-gw-freeze.txt "$RUNNER_TEMP/branch477-inputs/gw-freeze.txt"
+          echo 'cd431fe31fb7a98fd4e745fb76c01781dcd3059f84b95218201af705ad95ec70  '"$RUNNER_TEMP/branch477-inputs/gw-freeze.txt" | sha256sum -c -
+          cp .github/branch477-previous-gateway.xml "$RUNNER_TEMP/branch477-inputs/previous-gateway.xml"
+          echo 'f2ae80e29ff7b205c517c53a2c9ed1103bfeee4f41c083bedb8e6d133a134bbe  '"$RUNNER_TEMP/branch477-inputs/previous-gateway.xml" | sha256sum -c -
+          git diff --binary 89aed57f7489d17ee3492a4353bf07a40b49b505 "$feature" > "$RUNNER_TEMP/branch477-evidence/tested.patch"
+          printf '%s\n' "$feature" > "$RUNNER_TEMP/branch477-evidence/tested-head.txt"
+          sha256sum "$RUNNER_TEMP/branch477-inputs/"* > "$RUNNER_TEMP/branch477-evidence/input-sha256.txt"
+          docker info --format '{{.OperatingSystem}} {{.Architecture}} {{.MemTotal}} {{.DockerRootDir}}' > "$RUNNER_TEMP/branch477-evidence/docker-host.txt"
+          test "$(docker info --format '{{.MemTotal}}')" -ge 7516192768
+      - name: Fresh complete validation in Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/branch477-evidence"
+          name="branch477-${GITHUB_RUN_ID}"
+          trap 'docker stop --time 10 "$name" > "$out/stop.log" 2>&1 || true; docker inspect "$name" --format "{{json .State}}" > "$out/container-state.json" 2>/dev/null || true' EXIT
+          image=python@sha256:b18b261e1b4974b4f321451ad5251ded85abb22c2b8b262da527dda1d031ab30
+          docker pull "$image" > "$out/image-pull.log" 2>&1
+          printf '%s\n' "$image" > "$out/image-digest.txt"
+          docker create --init --name "$name" --cpus 2 --memory 6g --memory-swap 6g --pids-limit 512 \
+            --log-driver none --mount "type=bind,src=$RUNNER_TEMP/branch477-inputs,dst=/inputs,readonly" \
+            --mount "type=bind,src=$out,dst=/out" \
+            --mount "type=bind,src=$RUNNER_TEMP/branch477-pip-cache,dst=/root/.cache/pip" "$image" \
+            python -c 'import signal,sys,time; signal.signal(signal.SIGTERM,lambda *_:sys.exit(0)); time.sleep(1300)'
+          docker start "$name"
+          timeout --signal=TERM --kill-after=10s 1200 docker exec "$name" bash /inputs/run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr639-upstream-merge-evidence
+          path: ${{ runner.temp }}/branch477-evidence
+          retention-days: 14
