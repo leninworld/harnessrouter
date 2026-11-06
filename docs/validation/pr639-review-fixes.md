@@ -5,7 +5,8 @@ Summary of recorded results; not a terminal capture.
 ```text
 Merged candidate: 51e4c1b444e05376169055663d3cc0872935ab38
 Contributor preserved: 4824d8475d5fb89864b646dd8eea2278ffb07dff
-Contribution diff 89aed57..51e4c1b (also f8edb7d..85fe9bb) SHA256: 0bcb2204fdc46a89842e55fe274759d6eb6447e1a0175e98ce79c7ef660b2be2
+Contribution diff 89aed57..51e4c1b (also f8edb7d..85fe9bb)
+SHA256: 0bcb2204fdc46a89842e55fe274759d6eb6447e1a0175e98ce79c7ef660b2be2
 Fresh run42251215420 on51e4c1b: SUCCESS
 Run checked out fork-only validation child a776f94 (.github files only)
 Gateway1854PASS/17skip | Runner2067PASS/19skip | HTTP/Git integration1PASS
