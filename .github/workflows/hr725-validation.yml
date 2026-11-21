@@ -1,0 +1,94 @@
+# Fork-only workflow for HarnessRouter #725 (v3). It lives on a fork-only commit placed on top of the
+# candidate commit, on branch validation-hr725-a2 of leninworld/harnessrouter. It is never part of the
+# upstream PR. Budget (EXECUTION-PACKET-v3.md section 2): step limits 2+3+26+20+3 = 54 min, plus
+# 6 min reserved for job setup, post steps and inter-step overhead = 60 min job limit.
+name: Validate HarnessRouter 725 console fix in Docker
+on:
+  push:
+    branches: [validation-hr725-a2]
+permissions:
+  contents: read
+concurrency:
+  group: validation-hr725-a2
+  cancel-in-progress: false
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        timeout-minutes: 2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Seal exact candidate and base source
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_RUN_ATTEMPT" = 1                       # one run per sealed packet; a re-run is refused
+          test "$GITHUB_REPOSITORY" = leninworld/harnessrouter
+          test "$(uname -s)" = Linux
+          test "$(df --output=avail -B1 "$RUNNER_TEMP" | tail -1)" -ge 21474836480
+          test "$(docker info --format '{{.MemTotal}}')" -ge 7516192768
+          base=93994cfcea54b5af64ddd16175e2749106415184
+          candidate=$(git rev-parse HEAD^)
+          test "$candidate" = ea89e51eeef84f0040383152ef0b28ea592830a1           # the reviewed candidate commit
+          test "$(git rev-parse "$candidate^")" = "$base"
+          in="$RUNNER_TEMP/hr725-inputs"; out="$RUNNER_TEMP/hr725-evidence"; build="$RUNNER_TEMP/hr725-build"
+          mkdir -p "$in" "$out" "$build"
+          git diff --name-only "$candidate" HEAD | sort > "$RUNNER_TEMP/fork-only-files"
+          printf '%s\n' .github/hr725/run.sh .github/hr725/demo.sh .github/hr725/demo.mjs .github/hr725/gateway-lock.txt .github/hr725/source.sha256 .github/workflows/hr725-validation.yml | sort > "$RUNNER_TEMP/expected-fork-files"
+          diff -u "$RUNNER_TEMP/expected-fork-files" "$RUNNER_TEMP/fork-only-files"
+          git diff --name-only "$base" "$candidate" | sort > "$RUNNER_TEMP/actual-paths"
+          sed 's/^[0-9a-f]*  //' .github/hr725/source.sha256 | sort > "$RUNNER_TEMP/expected-paths"
+          diff -u "$RUNNER_TEMP/expected-paths" "$RUNNER_TEMP/actual-paths"
+          mkdir -p .git/info && printf '* -export-ignore -export-subst\n' > .git/info/attributes
+          git archive "$base" > "$in/base.tar"
+          git archive "$candidate" > "$in/candidate.tar"
+          cp .github/hr725/run.sh .github/hr725/demo.sh .github/hr725/demo.mjs .github/hr725/gateway-lock.txt .github/hr725/source.sha256 "$in/"
+          # the reviewed controller, lock and source-manifest hashes (EXECUTION-PACKET-FINAL.md section 2)
+          echo "2dc4eedbfce139be2ab9205b54e9039e54e13c6857d0511da99a1f0f5c97de81  $in/run.sh" | sha256sum -c -
+          echo "49cd8058fbdefb6e981a91c35f82fbae273fc2335e8db204e87ee552c2aa6ea7  $in/demo.sh" | sha256sum -c -
+          echo "47d4d712d824d15a5ea73797de602cd494ae266761f517c9892a49b1aab660fc  $in/demo.mjs" | sha256sum -c -
+          echo "964818140295cac692f35e2e21fba494767fd0879a7aad368bcb07f34e50ae43  $in/gateway-lock.txt" | sha256sum -c -
+          echo "c40ab3eb94ffefc48c18c37f6149149577d669a414e4fac48060b271990d4f0f  $in/source.sha256" | sha256sum -c -
+          git diff --binary "$base" "$candidate" > "$out/tested.patch"
+          printf 'base %s\ncandidate %s\nhead %s\nrun %s attempt %s\n' "$base" "$candidate" "$(git rev-parse HEAD)" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$out/identity.txt"
+          (cd "$in" && sha256sum *) > "$out/input-sha256.txt"
+          docker info --format '{{.OperatingSystem}} {{.Architecture}} {{.NCPU}} {{.MemTotal}}' > "$out/docker-host.txt"
+      - name: Console gates in pinned Node 20 Docker
+        timeout-minutes: 26
+        shell: bash
+        run: |
+          set -euo pipefail
+          in="$RUNNER_TEMP/hr725-inputs"; out="$RUNNER_TEMP/hr725-evidence"; build="$RUNNER_TEMP/hr725-build"
+          image=node@sha256:cacf10e99285cbbc891452e31249c1b5ec3ba225f40028fae946b75aeaf1b66a   # node:20.20.2-bookworm linux/amd64
+          timeout --signal=TERM --kill-after=10s 140 docker pull "$image" > "$out/image-pull.log" 2>&1
+          docker image inspect "$image" --format '{{.Id}} {{json .RepoDigests}}' > "$out/gates-image.txt"
+          chmod 0777 "$out" "$build"
+          set +e
+          timeout --signal=TERM --kill-after=15s 1350 docker run --rm --init --name "hr725-gates-$GITHUB_RUN_ID" \
+            --cpus 2 --memory 6g --memory-swap 6g --pids-limit 1024 --log-driver none \
+            --user 1000:1000 -e HOME=/tmp/home -e CI=1 \
+            --mount "type=bind,src=$in,dst=/inputs,readonly" --mount "type=bind,src=$out,dst=/out" \
+            --mount "type=bind,src=$build,dst=/build" \
+            "$image" bash /inputs/run.sh
+          status=$?
+          set -e
+          printf 'gates-container\t%s\n' "$status" >> "$out/workflow-exit-codes.tsv"
+          exit "$status"                                      # nonzero aggregate: the demo step is skipped
+      - name: Corrected-toast demonstration on the tested console build
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=15s 1140 bash "$RUNNER_TEMP/hr725-inputs/demo.sh" \
+            "$RUNNER_TEMP/hr725-inputs" "$RUNNER_TEMP/hr725-evidence" "$RUNNER_TEMP/hr725-build"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4.6.2
+        if: always()
+        timeout-minutes: 3
+        with:
+          name: hr725-evidence
+          path: ${{ runner.temp }}/hr725-evidence
+          retention-days: 14
